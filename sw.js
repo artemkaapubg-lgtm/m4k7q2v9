@@ -1,4 +1,4 @@
-const CACHE = 'vyssoo-v6';
+﻿const CACHE = 'vyssoo-v7';
 const CORE = [
   'assets/avatar.jpg',
   'assets/avatar.webp',

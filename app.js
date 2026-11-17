@@ -277,10 +277,13 @@ if (catBtn) {
   });
 }
 
-/* ——— счётчик визитов ——— */
+/* ——— счётчик визитов (Google Apps Script, JSONP) ——— */
 const viewsEl = document.getElementById('viewsCount');
+const COUNTER_URL =
+  'https://script.google.com/macros/s/AKfycbxmVNFe7eCkz0FdzOWG7lhtBh3MUV7PiHSSNLnb5TA-ZIpqhPvF4AYrcUkVq1UYXP832Q/exec';
 const VISIT_KEY = 'vyssoo:lastVisit';
 const VIEWS_CACHE_KEY = 'vyssoo:views';
+const VISITOR_KEY = 'vyssoo:vid';
 // совпадает с серверным окном антинакрутки: один визит с браузера за 24 часа
 const VISIT_WINDOW = 24 * 60 * 60 * 1000;
 const viewsFormat = new Intl.NumberFormat('ru-RU');
@@ -290,34 +293,71 @@ if (viewsEl && Number.isFinite(cachedViews) && cachedViews > 0) {
   viewsEl.textContent = viewsFormat.format(cachedViews);
 }
 
-const requestCount = async (method) => {
-  const res = await fetch('/api/visit', { method, cache: 'no-store' });
-  if (!res.ok) throw new Error(`status ${res.status}`);
-  return res.json();
+const visitorId = () => {
+  let id = localStorage.getItem(VISITOR_KEY);
+  if (!id) {
+    id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem(VISITOR_KEY, id);
+  }
+  return id;
 };
+
+const jsonp = (params) =>
+  new Promise((resolve, reject) => {
+    const cb = '__vyssooCb' + Math.random().toString(36).slice(2);
+    const script = document.createElement('script');
+    let settled = false;
+    const done = () => {
+      clearTimeout(timer);
+      delete window[cb];
+      script.remove();
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      done();
+      reject(new Error('timeout'));
+    }, 12000);
+    window[cb] = (data) => {
+      if (settled) return;
+      settled = true;
+      done();
+      resolve(data);
+    };
+    script.onerror = () => {
+      if (settled) return;
+      settled = true;
+      done();
+      reject(new Error('network'));
+    };
+    const query = new URLSearchParams({ ...params, callback: cb });
+    script.src = `${COUNTER_URL}?${query.toString()}`;
+    document.head.appendChild(script);
+  });
 
 const loadViews = async () => {
   if (!viewsEl) return;
   const last = Number(localStorage.getItem(VISIT_KEY)) || 0;
   const isNewVisit = Date.now() - last > VISIT_WINDOW;
-  const method = isNewVisit ? 'POST' : 'GET';
+  const params = isNewVisit ? { action: 'visit', vid: visitorId() } : { action: 'count' };
   try {
     let data;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        data = await requestCount(method);
+        data = await jsonp(params);
         break;
       } catch (err) {
-        if (attempt === 2) throw err;
-        // сеть до Functions иногда обрывается — повторяем с паузой
-        await sleep(1200 * (attempt + 1));
+        if (attempt === 1) throw err;
+        // Apps Script иногда отвечает медленно — одна повторная попытка
+        await sleep(1500);
       }
     }
+    if (!data || typeof data.count !== 'number') return;
     viewsEl.textContent = viewsFormat.format(data.count);
     localStorage.setItem(VIEWS_CACHE_KEY, String(data.count));
     if (isNewVisit) localStorage.setItem(VISIT_KEY, String(Date.now()));
   } catch (err) {
-    // оставляем закешированное число или «—»
+    // оставляем закешированное число
   }
 };
 
